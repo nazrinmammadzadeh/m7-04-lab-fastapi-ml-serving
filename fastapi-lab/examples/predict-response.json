@@ -1,0 +1,13 @@
+{
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "model_version": "moderation-v2.3.1",
+  "flagged": false,
+  "labels": [
+    { "label": "safe",             "probability": 0.9312 },
+    { "label": "suggestive",       "probability": 0.0421 },
+    { "label": "graphic_violence", "probability": 0.0158 },
+    { "label": "explicit_nudity",  "probability": 0.0071 },
+    { "label": "hate_symbols",     "probability": 0.0038 }
+  ],
+  "processing_ms": 187
+}

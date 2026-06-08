@@ -1,0 +1,708 @@
+openapi: "3.1.0"
+
+# Lint command:
+#   npx @redocly/cli lint openapi.yaml
+# Web validator:
+#   https://editor.swagger.io — paste spec, status bar must show "No Errors"
+
+info:
+  title: Vision Moderation as a Service
+  version: "1.0.0"
+  description: |
+    Public API for image moderation. Partner customers integrate this into their
+    upload flows to classify images for prohibited content.
+
+    **Authentication:** Every request must carry an `X-API-Key` header.
+    Tenant identity is derived from the API key — do not include a tenant ID
+    in request bodies.
+
+    **Observability:** Every response carries `X-Request-ID` for tracing.
+    Every successful prediction response also carries `X-Model-Version`.
+
+    **Versioning:** Path-based (`/v1/`). See `DECISIONS.md` for rationale.
+  contact:
+    name: VisionMod Platform Team
+    email: api@visionmod.io
+  license:
+    name: Proprietary
+    url: https://visionmod.io/terms
+
+servers:
+  - url: https://api.visionmod.io
+    description: Production
+  - url: https://api-staging.visionmod.io
+    description: Staging
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: prediction
+    description: Synchronous and asynchronous image moderation endpoints
+  - name: jobs
+    description: Async job status polling
+
+paths:
+
+  /v1/predict:
+    post:
+      tags: [prediction]
+      operationId: predictSingle
+      summary: Classify a single image (synchronous)
+      description: |
+        Classifies one image and returns the top K labels with calibrated
+        probabilities. p95 latency target: **300 ms**.
+
+        Use `POST /v1/predict-async` when the caller can tolerate higher
+        latency or the image is close to the 5 MB limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PredictRequest"
+      responses:
+        "200":
+          description: Image classified successfully.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+            X-Model-Version:
+              $ref: "#/components/headers/X-Model-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/predict-batch:
+    post:
+      tags: [prediction]
+      operationId: predictBatch
+      summary: Classify up to 32 images (synchronous batch)
+      description: |
+        Accepts 1–32 images in a single request. Each item carries a
+        caller-supplied `id`; the response map is keyed by those same IDs.
+
+        **Partial success:** if one image is corrupt or unprocessable, its
+        result entry carries `status: "error"` while other items succeed
+        normally. The HTTP status is always `200` for a structurally valid
+        request. See `DECISIONS.md` for the full partial-failure policy.
+
+        **413 threshold:** the total request body exceeds 160 MB
+        (32 images × 5 MB). Individual images over 5 MB inside a batch are
+        returned as per-item errors, not HTTP 413.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchPredictRequest"
+      responses:
+        "200":
+          description: |
+            Batch processed. Check each item's `status` field — individual
+            items may have failed even though the HTTP status is 200.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+            X-Model-Version:
+              $ref: "#/components/headers/X-Model-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchPredictResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/predict-async:
+    post:
+      tags: [prediction]
+      operationId: submitAsyncPrediction
+      summary: Submit a single image for asynchronous classification
+      description: |
+        Queues one image for classification and returns a `job_id` immediately
+        (HTTP 202). Basic validation (missing fields, wrong MIME type) is
+        checked synchronously and returns 4xx. Image-level failures (corrupt
+        content) surface as `status: "failed"` in the job result.
+
+        Poll `GET /v1/predictions/{job_id}` for the result.
+        Results are retained for **24 hours** after the job reaches a
+        terminal state (`completed` or `failed`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PredictRequest"
+      responses:
+        "202":
+          description: Job accepted and queued. Poll the `polling_url` for status.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncSubmitResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/predictions/{job_id}:
+    get:
+      tags: [jobs]
+      operationId: getAsyncResult
+      summary: Poll an async prediction job
+      description: |
+        Returns the current status and, when complete, the prediction result.
+
+        **Job lifecycle:** `queued → processing → completed | failed`
+
+        **Result retention:** results are available for 24 hours after the job
+        reaches a terminal state. After that, this endpoint returns 404.
+
+        `X-Model-Version` is present in the response header only when
+        `status = "completed"`.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The `job_id` returned by `POST /v1/predict-async`.
+          example: "7f3b9a21-4c8e-4d56-b891-234567890abc"
+      responses:
+        "200":
+          description: |
+            Job found. Inspect `status` to determine whether the result is
+            ready. `X-Model-Version` is set only when `status = "completed"`.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+            X-Model-Version:
+              $ref: "#/components/headers/X-Model-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+components:
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key issued per tenant. Tenant identity is resolved server-side
+        from the key. Do not send a tenant identifier in request bodies.
+
+  headers:
+    X-Request-ID:
+      description: |
+        UUID assigned to this request for distributed tracing.
+        Echo this value in support tickets or bug reports.
+        Present on every response, including errors.
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+
+    X-Model-Version:
+      description: |
+        Version string of the model that produced this prediction.
+        Format: `{name}-v{major}.{minor}.{patch}`.
+        Present on all successful prediction responses (HTTP 200 for sync
+        endpoints; HTTP 200 with `status: "completed"` for the polling
+        endpoint). Not present on error responses.
+      schema:
+        type: string
+        example: "moderation-v2.3.1"
+
+  schemas:
+
+    Label:
+      type: object
+      required:
+        - label
+        - probability
+      properties:
+        label:
+          type: string
+          description: |
+            Moderation category identifier. Stable values include:
+            `safe`, `explicit_nudity`, `suggestive`, `graphic_violence`,
+            `hate_symbols`, `spam`. New categories may be added in minor
+            model releases.
+          example: "graphic_violence"
+        probability:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Calibrated probability score for this label.
+          example: 0.03
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+        - request_id
+      properties:
+        code:
+          type: string
+          description: |
+            Machine-readable error code. Stable values: `BAD_REQUEST`,
+            `UNAUTHORIZED`, `NOT_FOUND`, `PAYLOAD_TOO_LARGE`,
+            `UNPROCESSABLE_IMAGE`, `RATE_LIMITED`, `SERVICE_UNAVAILABLE`.
+          example: "PAYLOAD_TOO_LARGE"
+        message:
+          type: string
+          description: Human-readable explanation suitable for logging.
+          example: "Image size 6.2 MB exceeds the 5 MB limit."
+        request_id:
+          type: string
+          format: uuid
+          description: Mirrors the `X-Request-ID` response header.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    PredictRequest:
+      type: object
+      required:
+        - image_data
+        - content_type
+      properties:
+        image_data:
+          type: string
+          format: byte
+          description: |
+            Base64-encoded image binary content (standard alphabet, with or
+            without padding). Maximum **decoded** size: 5 MB.
+            Supported formats: JPEG, PNG, WebP.
+            Example value is a real 1x1 JPEG; production images will be larger.
+        content_type:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - image/webp
+          description: MIME type of the image in `image_data`.
+          example: "image/jpeg"
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+          description: |
+            Number of top labels to return, ordered by descending probability.
+            Must be between 1 and 10; defaults to 5.
+          example: 5
+
+    PredictResponse:
+      type: object
+      required:
+        - request_id
+        - model_version
+        - flagged
+        - labels
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Mirrors `X-Request-ID` for clients that cannot inspect headers.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        model_version:
+          type: string
+          description: Mirrors `X-Model-Version` for clients that cannot inspect headers.
+          example: "moderation-v2.3.1"
+        flagged:
+          type: boolean
+          description: |
+            `true` if any label's probability exceeds the tenant's configured
+            flagging threshold (set in the API key's tenant profile).
+          example: false
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Label"
+          description: Top K labels, ordered by descending probability.
+        processing_ms:
+          type: integer
+          description: Server-side inference time in milliseconds (excludes network).
+          example: 187
+
+    BatchItem:
+      type: object
+      required:
+        - id
+        - image_data
+        - content_type
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Caller-supplied identifier for this image. Must be unique within
+            the request. Returned as the key in `BatchPredictResponse.results`.
+          example: "upload-00042"
+        image_data:
+          type: string
+          format: byte
+          description: |
+            Base64-encoded image content. Maximum decoded size: 5 MB per image.
+            Images exceeding 5 MB are returned as per-item errors, not HTTP 413.
+        content_type:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - image/webp
+          example: "image/jpeg"
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+          example: 3
+
+    BatchPredictRequest:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/BatchItem"
+          description: |
+            1–32 images to classify. Each item must carry a unique
+            caller-supplied `id`; duplicate IDs within one request are
+            rejected with HTTP 400.
+
+    BatchItemSuccess:
+      type: object
+      required:
+        - status
+        - flagged
+        - labels
+        - model_version
+      properties:
+        status:
+          type: string
+          enum:
+            - success
+          description: Discriminator value — always `"success"` for this variant.
+        flagged:
+          type: boolean
+          example: false
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Label"
+        model_version:
+          type: string
+          example: "moderation-v2.3.1"
+        processing_ms:
+          type: integer
+          example: 94
+
+    BatchItemError:
+      type: object
+      required:
+        - status
+        - error
+      properties:
+        status:
+          type: string
+          enum:
+            - error
+          description: Discriminator value — always `"error"` for this variant.
+        error:
+          $ref: "#/components/schemas/Error"
+
+    BatchItemResult:
+      oneOf:
+        - $ref: "#/components/schemas/BatchItemSuccess"
+        - $ref: "#/components/schemas/BatchItemError"
+      discriminator:
+        propertyName: status
+        mapping:
+          success: "#/components/schemas/BatchItemSuccess"
+          error: "#/components/schemas/BatchItemError"
+
+    BatchPredictResponse:
+      type: object
+      required:
+        - request_id
+        - results
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Mirrors `X-Request-ID`.
+          example: "660f9511-f30c-52e5-b827-557766551002"
+        results:
+          type: object
+          description: |
+            Map of caller-supplied item `id` to classification result.
+            Always keyed by the `id` from the request — never by position.
+            Every input item appears exactly once, as either success or error.
+          additionalProperties:
+            $ref: "#/components/schemas/BatchItemResult"
+
+    AsyncSubmitResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - polling_url
+        - request_id
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this async job. Use to poll for results.
+          example: "7f3b9a21-4c8e-4d56-b891-234567890abc"
+        status:
+          type: string
+          enum:
+            - queued
+          description: Initial job state — always `"queued"` in the submit response.
+        polling_url:
+          type: string
+          description: Relative URL to poll for job status.
+          example: "/v1/predictions/7f3b9a21-4c8e-4d56-b891-234567890abc"
+        request_id:
+          type: string
+          format: uuid
+          description: Mirrors `X-Request-ID`.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    AsyncJobStatus:
+      type: string
+      enum:
+        - queued
+        - processing
+        - completed
+        - failed
+      description: |
+        Job lifecycle states: `queued → processing → completed | failed`.
+        `completed` and `failed` are terminal states.
+        Results are retained for 24 hours after a terminal state is reached.
+
+    AsyncResult:
+      type: object
+      required:
+        - job_id
+        - status
+        - request_id
+        - submitted_at
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "7f3b9a21-4c8e-4d56-b891-234567890abc"
+        status:
+          $ref: "#/components/schemas/AsyncJobStatus"
+        request_id:
+          type: string
+          format: uuid
+          description: Mirrors `X-Request-ID` of the polling request.
+          example: "881b1733-c52e-74a7-d049-779988773114"
+        model_version:
+          type: string
+          description: Present when `status = "completed"`. Mirrors `X-Model-Version`.
+          example: "moderation-v2.3.1"
+        flagged:
+          type: boolean
+          description: Present when `status = "completed"`.
+          example: false
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Label"
+          description: Top K labels, descending probability. Present when `status = "completed"`.
+        error:
+          $ref: "#/components/schemas/Error"
+          description: Present when `status = "failed"`.
+        submitted_at:
+          type: string
+          format: date-time
+          example: "2026-06-08T10:00:00Z"
+        completed_at:
+          type: string
+          format: date-time
+          description: Present when `status = "completed"` or `"failed"`.
+          example: "2026-06-08T10:00:04Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            When the result will be deleted (24 hours after `completed_at`).
+            After this timestamp `GET /v1/predictions/{job_id}` returns 404.
+          example: "2026-06-09T10:00:04Z"
+
+  responses:
+
+    BadRequest:
+      description: |
+        Request body failed schema validation (missing required field, wrong
+        type, duplicate batch item IDs).
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "BAD_REQUEST"
+            message: "content_type must be one of: image/jpeg, image/png, image/webp."
+            request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    Unauthorized:
+      description: |
+        `X-API-Key` header is missing, malformed, or refers to a revoked key.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "UNAUTHORIZED"
+            message: "X-API-Key header is missing or invalid."
+            request_id: "550e8400-e29b-41d4-a716-446655440001"
+
+    PayloadTooLarge:
+      description: |
+        For single-image endpoints: the decoded image exceeds 5 MB.
+        For the batch endpoint: the total request body exceeds 160 MB.
+        Individual images over 5 MB inside a batch are per-item errors.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "PAYLOAD_TOO_LARGE"
+            message: "Image size 6.2 MB exceeds the 5 MB limit. Compress or resize before uploading."
+            request_id: "550e8400-e29b-41d4-a716-446655440002"
+
+    UnprocessableEntity:
+      description: |
+        The request is syntactically valid but the image cannot be decoded:
+        the base64 string is corrupt, or the binary content does not match
+        the declared `content_type`.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "UNPROCESSABLE_IMAGE"
+            message: "image_data cannot be decoded as image/jpeg. Verify base64 encoding and content_type."
+            request_id: "550e8400-e29b-41d4-a716-446655440003"
+
+    TooManyRequests:
+      description: Tenant rate limit exceeded. Respect the `Retry-After` header.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+        Retry-After:
+          description: Number of seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 0
+            example: 5
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "RATE_LIMITED"
+            message: "Rate limit exceeded. Retry after 5 seconds."
+            request_id: "550e8400-e29b-41d4-a716-446655440004"
+
+    ServiceUnavailable:
+      description: |
+        The inference backend is temporarily unavailable. Retry with
+        exponential back-off.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "SERVICE_UNAVAILABLE"
+            message: "The moderation service is temporarily unavailable. Please retry in a moment."
+            request_id: "550e8400-e29b-41d4-a716-446655440005"
+
+    NotFound:
+      description: |
+        Job ID does not exist or its result has expired (24-hour retention).
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "NOT_FOUND"
+            message: "Job not found. It may not exist or its result may have expired (results are retained for 24 hours after completion)."
+            request_id: "550e8400-e29b-41d4-a716-446655440006"

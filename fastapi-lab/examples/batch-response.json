@@ -1,0 +1,35 @@
+{
+  "request_id": "660f9511-f30c-52e5-b827-557766551002",
+  "results": {
+    "upload-00042": {
+      "status": "success",
+      "flagged": false,
+      "labels": [
+        { "label": "safe",             "probability": 0.9701 },
+        { "label": "suggestive",       "probability": 0.0198 },
+        { "label": "graphic_violence", "probability": 0.0101 }
+      ],
+      "model_version": "moderation-v2.3.1",
+      "processing_ms": 94
+    },
+    "upload-00043": {
+      "status": "error",
+      "error": {
+        "code": "UNPROCESSABLE_IMAGE",
+        "message": "image_data for item 'upload-00043' cannot be decoded as image/png. The file may be corrupt or the content_type may be incorrect.",
+        "request_id": "660f9511-f30c-52e5-b827-557766551002"
+      }
+    },
+    "upload-00044": {
+      "status": "success",
+      "flagged": true,
+      "labels": [
+        { "label": "explicit_nudity",  "probability": 0.8913 },
+        { "label": "suggestive",       "probability": 0.0876 },
+        { "label": "safe",             "probability": 0.0211 }
+      ],
+      "model_version": "moderation-v2.3.1",
+      "processing_ms": 201
+    }
+  }
+}

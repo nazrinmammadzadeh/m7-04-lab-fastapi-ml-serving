@@ -1,0 +1,23 @@
+{
+  "_note": "image_data values are truncated base64 placeholders. Each represents a distinct image up to 5 MB. The three different magic-byte prefixes illustrate JPEG (/9j/), PNG (iVBOR), and WebP (UklGR) formats.",
+  "items": [
+    {
+      "id": "upload-00042",
+      "image_data": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/...",
+      "content_type": "image/jpeg",
+      "top_k": 3
+    },
+    {
+      "id": "upload-00043",
+      "image_data": "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADXklEQVR4nO3BMQEAAADCoPVP7WsIoAAAAAAAAAAAAAAAAAAAeAMBAAAAAAAAAAAA...",
+      "content_type": "image/png",
+      "top_k": 3
+    },
+    {
+      "id": "upload-00044",
+      "image_data": "UklGRiQAAABXRUJQVlA4IBgAAACQAQCdASoBAAEAAUAmJYgCdAEO/gHOAAA=",
+      "content_type": "image/webp",
+      "top_k": 3
+    }
+  ]
+}

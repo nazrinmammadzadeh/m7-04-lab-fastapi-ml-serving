@@ -1,0 +1,6 @@
+{
+  "_note": "image_data is a base64-encoded placeholder representing a ~120 KB JPEG (1024x768 product photo). Real requests encode the full image binary. The leading bytes /9j/4AAQ are the standard JPEG SOI + APP0 marker.",
+  "image_data": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCABgAIADASIAAhEBAxEB/8QAGwABAAMBAQEBAAAAAAAAAAAAAAQFBgMCAQf/...",
+  "content_type": "image/jpeg",
+  "top_k": 5
+}
